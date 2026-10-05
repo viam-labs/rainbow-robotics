@@ -1,0 +1,13 @@
+{
+  "module_name": "rainbow-robotics",
+  "visibility": "public_unlisted",
+  "namespace": "viam",
+  "language": "go",
+  "resource_type": "component",
+  "resource_subtype": "arm",
+  "model_name": "rb10-1300",
+  "initialize_git": false,
+  "generator_version": "0.1.0",
+  "generated_on": "2026-09-29T18:45:48.714155Z",
+  "module_readme_link": "README.md"
+}

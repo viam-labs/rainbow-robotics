@@ -1,0 +1,30 @@
+{
+  "$schema": "https://dl.viam.dev/module.schema.json",
+  "module_id": "viam:rainbow-robotics",
+  "visibility": "public",
+  "url": "https://github.com/viam-labs/rainbow-robotics",
+  "description": "Go module for Rainbow Robotics RB-series collaborative arms",
+  "models": [
+    {
+      "api": "rdk:component:arm",
+      "model": "viam:rainbow-robotics:rb10-1300",
+      "markdown_link": "README.md#configure-the-arm",
+      "short_description": "Rainbow Robotics RB10-1300 over the control box's native TCP script protocol"
+    },
+    {
+      "api": "rdk:component:arm",
+      "model": "viam:rainbow-robotics:rb10-1300-simulated",
+      "markdown_link": "README.md#simulated-arm",
+      "short_description": "In-process twin of the RB10-1300 for planning without hardware"
+    }
+  ],
+  "markdown_link": "README.md",
+  "entrypoint": "bin/rainbow-robotics",
+  "build": {
+    "build": "make module",
+    "setup": "make setup",
+    "path": "bin/module.tar.gz",
+    "arch": ["linux/amd64", "linux/arm64", "darwin/arm64"],
+    "darwin_deps": ["nlopt-static", "go"]
+  }
+}

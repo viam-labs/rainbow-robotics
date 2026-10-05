@@ -1,0 +1,85 @@
+{
+    "name": "rb10-1300",
+    "kinematic_param_type": "SVA",
+    "links": [
+        {
+            "id": "link0",
+            "parent": "world",
+            "translation": {"x": 0, "y": 0, "z": 0},
+            "geometry": {
+                "type": "box",
+                "x": 196, "y": 196, "z": 100,
+                "translation": {"x": 0, "y": 0, "z": 50}
+            }
+        },
+        {
+            "id": "link1",
+            "parent": "base",
+            "translation": {"x": 0, "y": 0, "z": 197.0},
+            "geometry": {
+                "type": "capsule",
+                "r": 85, "l": 194,
+                "translation": {"x": 0, "y": -5.5, "z": 187}
+            }
+        },
+        {
+            "id": "link2",
+            "parent": "shoulder",
+            "translation": {"x": 0, "y": -187.5, "z": 612.7},
+            "geometry": {
+                "type": "capsule",
+                "r": 97, "l": 754,
+                "translation": {"x": 0, "y": -177.6, "z": 297.7}
+            }
+        },
+        {
+            "id": "link3",
+            "parent": "elbow",
+            "translation": {"x": 0, "y": 148.4, "z": 570.15},
+            "geometry": {
+                "type": "capsule",
+                "r": 66.5, "l": 678,
+                "translation": {"x": 0, "y": 143, "z": 278}
+            }
+        },
+        {
+            "id": "link4",
+            "parent": "wrist1",
+            "translation": {"x": 0, "y": -117.15, "z": 0},
+            "geometry": {
+                "type": "capsule",
+                "r": 49.4, "l": 132,
+                "translation": {"x": 0, "y": -115.2, "z": 5.9}
+            }
+        },
+        {
+            "id": "link5",
+            "parent": "wrist2",
+            "translation": {"x": 0, "y": 0, "z": 117.15},
+            "geometry": {
+                "type": "capsule",
+                "r": 49.4, "l": 132,
+                "translation": {"x": 0, "y": -6.4, "z": 114.7},
+                "orientation": {"type": "ov_degrees", "value": {"x": 0, "y": 1, "z": 0, "th": 0}}
+            }
+        },
+        {
+            "id": "link6",
+            "parent": "wrist3",
+            "translation": {"x": 0, "y": -115.3, "z": 0},
+            "geometry": {
+                "type": "capsule",
+                "r": 45, "l": 96,
+                "translation": {"x": 0, "y": -91.3, "z": -2.5}
+            }
+        }
+    ],
+    "joints": [
+        {"id": "base",     "type": "revolute", "parent": "link0", "axis": {"x": 0, "y": 0, "z": 1}, "min": -360, "max": 360},
+        {"id": "shoulder", "type": "revolute", "parent": "link1", "axis": {"x": 0, "y": 1, "z": 0}, "min": -360, "max": 360},
+        {"id": "elbow",    "type": "revolute", "parent": "link2", "axis": {"x": 0, "y": 1, "z": 0}, "min": -165, "max": 165},
+        {"id": "wrist1",   "type": "revolute", "parent": "link3", "axis": {"x": 0, "y": 1, "z": 0}, "min": -360, "max": 360},
+        {"id": "wrist2",   "type": "revolute", "parent": "link4", "axis": {"x": 0, "y": 0, "z": 1}, "min": -360, "max": 360},
+        {"id": "wrist3",   "type": "revolute", "parent": "link5", "axis": {"x": 0, "y": 1, "z": 0}, "min": -360, "max": 360}
+    ]
+}
