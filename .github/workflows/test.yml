@@ -12,6 +12,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Mark checkout safe
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Install golangci-lint
+        # The rdk-devenv image ships Go but not golangci-lint. Pin the version
+        # that etc/.golangci.yaml (v2 format) is written against.
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.14.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Lint
         run: make lint
       - name: Test
