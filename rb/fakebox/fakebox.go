@@ -374,8 +374,8 @@ func (b *Box) handle(line string) (string, bool) {
 	defer b.mu.Unlock()
 	b.cmds = append(b.cmds, line)
 
-	switch {
-	case line == "mc jall init":
+	switch line {
+	case "mc jall init":
 		if b.st.InitStateInfo != rb.InitStateActivated && !b.activating {
 			b.activating = true
 			go b.activate()
@@ -383,39 +383,39 @@ func (b *Box) handle(line string) (string, bool) {
 			b.broadcastLocked("info[activation][done]")
 		}
 		return "", true
-	case line == "pgmode real":
+	case "pgmode real":
 		if b.st.InitStateInfo != rb.InitStateActivated {
 			b.broadcastLocked("error[code][186]")
 			return "", true
 		}
 		b.st.RealVsSimulationMode = rb.OperationModeReal
 		return "", true
-	case line == "pgmode simulation":
+	case "pgmode simulation":
 		b.st.RealVsSimulationMode = rb.OperationModeSimulation
 		return "", true
-	case line == "task stop":
+	case "task stop":
 		b.stopMotionLocked()
 		return "", true
-	case line == "task pause":
+	case "task pause":
 		b.st.TaskState = rb.TaskStatePaused
 		return "", true
-	case line == "task resume_a", line == "task resume_b":
+	case "task resume_a", "task resume_b":
 		b.st.TaskState = rb.TaskStateIdle
 		return "", true
-	case line == "freedrive_teach_on()":
+	case "freedrive_teach_on()":
 		if b.st.Simulation() {
 			b.broadcastLocked("error[code][204]")
 			return "", true
 		}
 		b.st.IsFreedriveMode = 1
 		return "", true
-	case line == "freedrive_teach_off()":
+	case "freedrive_teach_off()":
 		b.st.IsFreedriveMode = 0
 		return "", true
-	case line == "move_jb2_clear()":
+	case "move_jb2_clear()":
 		b.jb2Building = nil
 		return "", true
-	case line == "move_jb2_run()":
+	case "move_jb2_run()":
 		if len(b.jb2Building) == 0 {
 			return "", true
 		}
@@ -423,13 +423,13 @@ func (b *Box) handle(line string) (string, bool) {
 		b.jb2Building = nil
 		b.startNextLocked()
 		return "", true
-	case line == "AvadaKedavra()":
+	case "AvadaKedavra()":
 		b.st.InitStateInfo = 0
 		b.st.InformationChunk1 &^= rb.InfoBitArmPower
 		b.stopMotionLocked()
 		b.broadcastLocked("error[code][0]")
 		return "", true
-	case line == "get_control_box_info()":
+	case "get_control_box_info()":
 		return fmt.Sprintf("info[controlbox][%s,%d]", b.opts.Version, 10), true
 	}
 
@@ -504,13 +504,13 @@ func (b *Box) handle(line string) (string, bool) {
 		return "", true
 	}
 	if m := reCollOnOff.FindStringSubmatch(line); m != nil {
-		v, _ := strconv.Atoi(m[1])
+		v, _ := strconv.ParseInt(m[1], 10, 32)
 		b.st.CollisionDetectOnOff = int32(v)
 		return "", true
 	}
 	if m := reBoxDOut.FindStringSubmatch(line); m != nil {
 		port, _ := strconv.Atoi(m[1])
-		mode, _ := strconv.Atoi(m[2])
+		mode, _ := strconv.ParseInt(m[2], 10, 32)
 		if port >= 0 && port < 16 && mode >= 0 {
 			b.st.DigitalOut[port] = int32(mode)
 		}
@@ -526,8 +526,8 @@ func (b *Box) handle(line string) (string, bool) {
 	}
 	if m := reToolOut.FindStringSubmatch(line); m != nil {
 		v, _ := strconv.Atoi(m[1])
-		s0, _ := strconv.Atoi(m[2])
-		s1, _ := strconv.Atoi(m[3])
+		s0, _ := strconv.ParseInt(m[2], 10, 32)
+		s1, _ := strconv.ParseInt(m[3], 10, 32)
 		b.st.TFBVoltageOut = float32(v)
 		b.st.TFBDigitalOut = [2]int32{int32(s0), int32(s1)}
 		return "", true

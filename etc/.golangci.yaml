@@ -25,6 +25,7 @@ linters:
     gosec:
       excludes:
         - G304 # file paths come from the module root
+        - G703 # same: moduleRoot() joins VIAM_MODULE_ROOT / the executable dir, not user input
         - G404 # math/rand is not used for security
     revive:
       rules:
