@@ -13,9 +13,10 @@ Models:
 | `viam:rainbow-robotics:rb10-1300` | The arm, over the control box's native protocol |
 | `viam:rainbow-robotics:rb10-1300-simulated` | In-process twin with the same kinematics, for planning without hardware |
 
-Everything marked **verify on hardware** below was read from Rainbow's
-documentation and SDK source, not tested on an arm yet. See the bring-up
-checklist at the end.
+Items marked **unverified on hardware** were derived from Rainbow's
+documentation and SDK source and have not yet been confirmed against a physical
+arm. See [Running on real hardware](#running-on-real-hardware) for the
+validation sequence.
 
 ## Configure the arm
 
@@ -37,7 +38,7 @@ mode the pendant already has it in.
 
 Start with `operation_mode: simulation`: the controller then moves only its
 commanded reference, and the module exercises every code path without moving
-the arm. Switch to `real` once the checklist passes.
+the arm. Switch to `real` once the validation sequence below passes.
 
 ### Attributes
 
@@ -47,7 +48,7 @@ the arm. Switch to `real` once the checklist passes.
 | `command_port` | int | 5000 | Script command port. |
 | `data_port` | int | 5001 | State packet port. |
 | `speed_degs_per_sec` | number | 60 | Joint speed for `move_j` and batch moves; also published as `max_velocity` in the kinematics. 0 < v ≤ `max_speed_degs_per_sec`. |
-| `acceleration_degs_per_sec_per_sec` | number | 200 | Joint acceleration; published as `max_acceleration`. **verify on hardware** |
+| `acceleration_degs_per_sec_per_sec` | number | 200 | Joint acceleration; published as `max_acceleration`. **unverified on hardware** |
 | `max_speed_degs_per_sec` | number | 180 | Ceiling that `set_speed`, `MoveOptions` and per-move overrides are clamped to. |
 | `max_acceleration_degs_per_sec_per_sec` | number | unset | Ceiling for acceleration; unset means no clamp. |
 | `operation_mode` | `real` or `simulation` | `real` | Sent as `pgmode` after activation. `simulation` is the safe bring-up default. |
@@ -57,7 +58,7 @@ the arm. Switch to `real` once the checklist passes.
 | `state_poll_hz` | int | 100 | Rate of `reqdata` polling (10–500). |
 | `move_hz` | int | 100 | Default setpoint spacing for streamed moves (10–500). Above 100 needs the pendant's high-speed external script mode. |
 | `servo_gain`, `servo_alpha`, `servo_hold_secs` | number | 0.5 / 0.5 / 0.03 | Passed to `move_servo_j` as `gain`, `alpha`, `t2` (the values Rainbow's ROS 2 driver uses). |
-| `joint_batch_blend` | number | 0.5 | Blend argument of `move_jb2_add`. **verify on hardware** |
+| `joint_batch_blend` | number | 0.5 | Blend argument of `move_jb2_add`. **unverified on hardware** |
 | `joint_batch_chunk_size` | int | 0 (no chunking) | Split long waypoint lists into batches of this size if the controller rejects large `move_jb2` batches. The arm stops between chunks. |
 | `reject_move_request_threshold_deg` | number | 10 | A batch or streamed move whose first waypoint is further than this (L∞) from the current position is refused. |
 | `collision_detection` | bool | unset | When set, sent as `set_collision_onoff`. |
@@ -67,7 +68,7 @@ the arm. Switch to `real` once the checklist passes.
 | `use_urdf` | bool | false | Serve the URDF with STL collision meshes instead of the SVA file. The URDF's own ±180° joint limits apply and velocity limits cannot be published (RSDK-14232). |
 | `mesh_decimation_ratios` | [number] | unset | Per-mesh decimation when loading the URDF. |
 | `command_timeout_secs` | number | 2 | How long to wait for `The command was executed`. |
-| `power_off_on_close` | bool | false | Send `AvadaKedavra()` in `Close`. Off so a viam-server restart never drops the arm. **verify on hardware** |
+| `power_off_on_close` | bool | false | Send `AvadaKedavra()` in `Close`. Off so a viam-server restart never drops the arm. **unverified on hardware** |
 | `allow_raw_commands` | bool | false | Enables the `eval` DoCommand. |
 
 ### How moves are executed
@@ -108,9 +109,9 @@ Commands are dispatched on key presence, e.g. `{"set_speed": 30}`.
 | `set_operation_mode` | `"real"` or `"simulation"` | `pgmode ...`; refused while moving. |
 | `set_speed_bar` | 0–1 | `set_speed_bar(...)`. |
 | `set_collision` | `{"enabled", "sensitivity", "mode", "after"}` | The four `set_collision_*` scripts. |
-| `clear_error` | — | Sends `task stop` and reports which fault conditions remain. **verify on hardware**: the documented recovery script is unknown. |
+| `clear_error` | — | Sends `task stop` and reports which fault conditions remain. **unverified on hardware**: the documented recovery script is unknown. |
 | `set_payload` | `{"kg", "cog_mm": [x,y,z]}` | `set_payload_info`. |
-| `power_off` | — | `AvadaKedavra()` when idle. **verify on hardware** |
+| `power_off` | — | `AvadaKedavra()` when idle. **unverified on hardware** |
 | `get_io` | — | Box and tool-flange digital and analog I/O from the snapshot. |
 | `set_box_dout` | `{"port", "value"}` | `set_box_dout(port, -1/0/1)`. |
 | `set_box_aout` | `{"port", "value"}` | `set_box_aout(port, volts)`. |
@@ -130,11 +131,11 @@ straight up. The end-effector frame is a zero-length `tcp` link after `link6`
 (matching the URDF's `tcp_joint`) with Z pointing out of the flange and X along
 the base X at zero pose, so "point the tool down" means the flange faces down
 and grippers attach along Z. The rotation lives on `tcp` rather than on
-`link6` so the links that carry geometry and meshes keep identity orientation. **verify on hardware** whether the controller's `tcp_ref`
-uses the same X direction; the FK cross-check reports it. Joint limits are
-±360° (elbow ±165°); the configured speed and
-acceleration are written into every joint so the motion service's trajectory
-limits see them. Collision geometry is one box for the base and one capsule per
+`link6` so the links that carry geometry and meshes keep identity orientation.
+Whether the controller's `tcp_ref` uses the same X direction is **unverified on
+hardware**; the FK cross-check reports it. Joint limits are ±360° (elbow
+±165°); the configured speed and acceleration are written into every joint so
+the motion service's trajectory limits see them. Collision geometry is one box for the base and one capsule per
 link, sized from the collision meshes.
 
 `Get3DModels` serves one GLB per link (`link0`…`link6`) from
@@ -149,9 +150,9 @@ pose in the kinematics file means re-running `make tools` (needs the
 rbpodo_ros2 checkout). The GLBs match the default SVA kinematics; with
 `use_urdf` the link geometries differ and the overlay is unverified.
 
-If Brad's arm turns out to be the `rb10_1300e_u` variant (wrist1 y offset
-151.4 mm instead of 148.4 mm) the FK cross-check will show a 3 mm error; change
-that one translation in the kinematics file.
+The kinematics describe the `rb10_1300e` flange variant. On an `rb10_1300e_u`
+(wrist1 y offset 151.4 mm instead of 148.4 mm) the FK cross-check shows a 3 mm
+error; the fix is that one translation in the kinematics file.
 
 ## Simulated arm
 
@@ -185,37 +186,97 @@ RB_HOST=10.0.2.7 make test-hardware   # FK cross-check and simulation-mode moves
 
 Repository layout: `rb/` is the protocol client (no Viam imports),
 `rb/fakebox/` the fake control box used by tests, `arm/` the Viam resource,
-`tools/` mesh conversion utilities. See `CLAUDE.md` for the conventions and
-safety rules.
+`tools/` mesh conversion utilities. Conventions and safety rules for
+contributors are in `CLAUDE.md`.
 
-## Hardware bring-up checklist
+### Running without hardware
 
-Each step gates the next.
+`tools/fakebox` runs the test double as a standalone control box on ports 5000
+and 5001, so the real `rb10-1300` model can be driven from a local viam-server:
 
-1. Laptop on `10.0.2.x`; `nc 10.0.2.7 5000` accepts `get_control_box_info()`
-   and answers `info[controlbox][...]`. Record the system version.
-2. `RB_HOST=10.0.2.7 go test -run TestHardwareControlBoxInfo -v ./arm/`.
-3. Module in `operation_mode: simulation`: `JointPositions` matches the pendant,
-   `MoveToJointPositions` to `[0,0,0,0,0,0]` and `[0,-30,90,0,60,0]`, `Stop`
-   mid-move, `IsMoving` toggles (`TestHardwareSimulationMoves`).
-4. FK cross-check: `TestHardwareFKCrossCheck` (50 random poses, model versus
-   `calc_fk_tcp`, within 1 mm and 0.5°) with the controller TCP offset at zero.
-   This confirms the kinematics file, the joint sign convention and the Euler
-   convention of `tcp_ref` in one go.
-5. `MoveThroughJointPositions` with a 50-waypoint planner output in simulation;
-   note whether `move_jb2` accepts it whole. If not, set `joint_batch_chunk_size`.
-6. Streamed moves in simulation at 50 Hz, then 100 Hz; `robot_state` must not
-   drop to 1 mid-stream.
-7. Switch to `real` with `speed_bar: 0.2`, e-stop within reach, nothing inside
-   the 1.3 m reach; repeat the reference poses and one `MoveToPosition` through
-   the motion service.
-8. Collision test: obstruct gently with collision detection on; confirm
-   `stopped before reaching target: collision stop is active` and that
-   `clear_error` recovers (or find the right recovery script and update it).
-9. Raise `speed_bar` to 1.0 and `speed_degs_per_sec` to 90; repeat the planner
-   test; measure setpoint-to-motion latency on the streamed path.
-10. Power-cycle the control box with viam-server running; confirm the module
-    reconnects and re-activates without manual intervention.
+```sh
+go run ./tools/fakebox -activated
+```
+
+Then configure the arm with `"host": "127.0.0.1"` and
+`"operation_mode": "simulation"`. The fake box interpolates joints at the
+configured speed and answers every script the module sends; commands it does
+not implement are refused with `not allowed`, which is the cue to extend
+`rb/fakebox/`.
+
+## Running on real hardware
+
+### Prerequisites
+
+- An RB10-1300 with its control box powered on and the teach pendant connected.
+  The module activates the arm itself (`mc jall init`) unless
+  `activate_on_start` is false.
+- The machine running viam-server on the control box's network. Rainbow's
+  default control box address is `10.0.2.7`, so the host needs an address on
+  `10.0.2.x`. Ports 5000 (script) and 5001 (state) must be reachable.
+- Nothing inside the 1.3 m reach, and the e-stop within reach of whoever is
+  testing.
+
+Confirm connectivity before configuring anything:
+
+```sh
+printf 'get_control_box_info()\r\n' | nc -w 2 10.0.2.7 5000
+```
+
+The box answers `info[controlbox][...]` followed by `The command was executed`.
+
+### Install the module
+
+From the Viam registry, add the `viam:rainbow-robotics` module to the machine
+and configure a component with model `viam:rainbow-robotics:rb10-1300`. To run
+a local build instead, `make build` and add a local module whose executable
+path is `bin/rainbow-robotics`.
+
+### Validation sequence
+
+Each step gates the next. The first six steps never move the arm.
+
+1. **Connectivity.** The `nc` check above succeeds. Note the controller version
+   it reports.
+2. **Gated hardware tests.** These run only when `RB_HOST` is set and only ever
+   use simulation mode:
+
+   ```sh
+   RB_HOST=10.0.2.7 make test-hardware
+   ```
+
+   `TestHardwareControlBoxInfo` checks the handshake. `TestHardwareFKCrossCheck`
+   compares the module's model with the controller's `calc_fk_tcp` at 50 random
+   joint configurations, within 1 mm and 0.5°, with the controller's TCP offset
+   at zero. It settles the kinematics file, the joint sign convention, the Euler
+   convention of `tcp_ref` and the flange variant in one run.
+   `TestHardwareSimulationMoves` exercises blocking moves, `Stop` and
+   `IsMoving`.
+3. **Module in simulation mode.** Configure the arm with
+   `operation_mode: simulation`. `JointPositions` should match the pendant.
+   Move to `[0,0,0,0,0,0]` and `[0,-30,90,0,60,0]`, stop mid-move, and check
+   `IsMoving`.
+4. **Batch moves.** Run `MoveToPosition` through the motion service so the
+   planner produces a long waypoint list. If the controller rejects the batch,
+   set `joint_batch_chunk_size`.
+5. **Streamed moves.** Stream at 50 Hz, then 100 Hz; `robot_state` must stay
+   at 3 for the whole stream. Rates above 100 Hz need the pendant's high-speed
+   external script mode.
+6. **Settings.** Confirm `speed_bar`, payload and collision settings from the
+   config appear on the pendant after a module restart.
+7. **Real mode, slow.** Set `operation_mode: real` and `speed_bar: 0.2`. Repeat
+   the reference poses and one motion-service move.
+8. **Faults.** With collision detection on, obstruct the arm gently. The move
+   should fail with `stopped before reaching target: collision stop is active`.
+   Then test `clear_error`. The documented recovery script is unverified, so
+   this step may need a code change.
+9. **Speed.** Raise `speed_bar` to 1.0 and `speed_degs_per_sec` to 90; repeat
+   the planner test and measure setpoint-to-motion latency on the streamed path.
+10. **Resilience.** Power-cycle the control box with viam-server running. The
+    module should reconnect and re-activate without intervention.
+
+Faults are never cleared automatically. `power_off_on_close` defaults to false
+so a viam-server restart never powers the arm down.
 
 ## Sources
 
