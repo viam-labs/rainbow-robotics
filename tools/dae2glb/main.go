@@ -4,6 +4,10 @@
 // URDF link frame (metres, Z up) and carries the diffuse colour of every
 // material as an unlit-ish PBR base colour. No external dependencies.
 //
+// The output is NOT yet in the frame the visualizer expects: run
+// ./tools/glbrebase afterwards (make tools does both) to move each mesh's
+// origin to its link's collision geometry centre.
+//
 //	go run ./tools/dae2glb -in path/to/meshes/rb10_1300e/visual -out arm/3d_models/rb10-1300
 package main
 

@@ -63,6 +63,7 @@ degrees are rounded to a micro-degree so scripts never carry float noise.
 
 Batch size limit of `move_jb2`, meaning of the blend argument, the recovery
 script after a collision (`clear_error`), whether `AvadaKedavra()` is safe from
-a driver, per-joint speed ceilings, the Euler convention of `tcp_ref`, the
-Get3DModels mesh frame convention in the app, and the flange variant
-(`rb10_1300e` vs `rb10_1300e_u`, 3 mm at wrist1). Update README when resolved.
+a driver, per-joint speed ceilings, the Euler convention of `tcp_ref`, and the
+flange variant (`rb10_1300e` vs `rb10_1300e_u`, 3 mm at wrist1). Update README
+when resolved. (Resolved: Get3DModels GLBs are anchored at each link's
+collision geometry centre; see README and `tools/glbrebase`.)

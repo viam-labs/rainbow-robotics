@@ -46,6 +46,7 @@ all: lint module
 # Regenerate the GLB viewer meshes from an rbpodo_ros2 checkout.
 tools:
 	go run ./tools/dae2glb -in $(RBPODO_ROS2)/rbpodo_description/meshes/rb10_1300e/visual -out arm/3d_models/rb10-1300
+	go run ./tools/glbrebase -kinematics arm/rb10_1300_kinematics.json -dir arm/3d_models/rb10-1300
 
 clean:
 	rm -rf bin module.tar.gz

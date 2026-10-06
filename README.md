@@ -133,9 +133,15 @@ link, sized from the collision meshes.
 
 `Get3DModels` serves one GLB per link (`link0`…`link6`) from
 `arm/3d_models/rb10-1300/`, converted from the DAE visual meshes with
-`tools/dae2glb`. Meshes are in each link's URDF frame, in metres. **verify in
-the app** that the viewer places them correctly; if it expects a different frame
-convention the fix is one transform in the converter.
+`tools/dae2glb` and then re-expressed by `tools/glbrebase` (`make tools` runs
+both). The Viam visualizer anchors a link's GLB at the frame `<arm>:<link id>`
+offset by that link's **collision geometry centre and orientation**, so each
+mesh has its origin at the capsule (or box) centre with the capsule axis along
+Z, in metres. `TestGLBsSitInsideCollisionGeometry` checks every GLB fits its
+geometry so a mesh left in URDF frame fails CI. Changing a link's geometry
+pose in the kinematics file means re-running `make tools` (needs the
+rbpodo_ros2 checkout). The GLBs match the default SVA kinematics; with
+`use_urdf` the link geometries differ and the overlay is unverified.
 
 If Brad's arm turns out to be the `rb10_1300e_u` variant (wrist1 y offset
 151.4 mm instead of 148.4 mm) the FK cross-check will show a 3 mm error; change
