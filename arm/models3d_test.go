@@ -62,12 +62,14 @@ func TestGLBsSitInsideCollisionGeometry(t *testing.T) {
 	const slackM = 0.03
 
 	for _, link := range cfg.Links {
+		g := link.Geometry
+		if g == nil {
+			continue // a pure frame such as tcp has no mesh
+		}
 		path := filepath.Join("3d_models", ModelName, link.ID+".glb")
 		if _, err := os.Stat(path); err != nil {
 			t.Skipf("%s not present in this checkout", path)
 		}
-		g := link.Geometry
-		test.That(t, g, test.ShouldNotBeNil)
 
 		// Half-extents of the geometry in its own frame, metres.
 		var half [3]float64
