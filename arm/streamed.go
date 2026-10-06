@@ -71,7 +71,7 @@ func (a *rb10) MoveThroughJointPositionsStreamed(
 		select {
 		case batch, ok = <-batches:
 		case <-ctx.Done():
-			return fail(ctx.Err())
+			return fail(a.cancelErr(ctx))
 		}
 		if !ok {
 			break
@@ -103,7 +103,7 @@ func (a *rb10) MoveThroughJointPositionsStreamed(
 			}
 			t1 = max(t1, minServoT1)
 			if !sleepUntil(ctx, sendAt) {
-				return fail(ctx.Err())
+				return fail(a.cancelErr(ctx))
 			}
 			if lag := time.Since(sendAt).Seconds(); lag > t1+t2 && havePrev {
 				return fail(fmt.Errorf("streaming executor fell %.0f ms behind schedule (limit %.0f ms); stream stopped",
@@ -128,7 +128,7 @@ func (a *rb10) MoveThroughJointPositionsStreamed(
 		select {
 		case responses <- rdkarm.Response{}:
 		case <-ctx.Done():
-			return fail(ctx.Err())
+			return fail(a.cancelErr(ctx))
 		}
 	}
 

@@ -75,6 +75,9 @@ type rb10 struct {
 	lastState   state
 
 	streaming atomic.Bool
+	// stopRequested is set by Stop while a move is running so the interrupted
+	// move can say why its context ended.
+	stopRequested atomic.Bool
 }
 
 func newRB10(ctx context.Context, deps resource.Dependencies, conf resource.Config, logger logging.Logger) (rdkarm.Arm, error) {

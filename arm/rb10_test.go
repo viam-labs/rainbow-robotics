@@ -194,6 +194,16 @@ func TestZeroPoseIsStraightUp(t *testing.T) {
 	if math.Abs(p.X) > 1e-6 || math.Abs(p.Y-(-187.5+148.4-117.15-115.3)) > 1e-6 || math.Abs(p.Z-(197+612.7+570.15+117.15)) > 1e-6 {
 		t.Errorf("zero pose TCP = %v", p)
 	}
+	// Tool frame convention: Z points out of the flange (along -Y at zero pose),
+	// X stays along the base X. Grippers attach along Z and "point down" means
+	// the flange faces down.
+	rm := pose.Orientation().RotationMatrix()
+	if z := rm.Mul(r3.Vector{Z: 1}); z.Sub(r3.Vector{Y: -1}).Norm() > 1e-9 {
+		t.Errorf("tool Z at zero pose = %v, want (0,-1,0)", z)
+	}
+	if x := rm.Mul(r3.Vector{X: 1}); x.Sub(r3.Vector{X: 1}).Norm() > 1e-9 {
+		t.Errorf("tool X at zero pose = %v, want (1,0,0)", x)
+	}
 	limits := model.DoF()
 	if len(limits) != 6 {
 		t.Fatalf("DoF = %d", len(limits))
@@ -350,6 +360,9 @@ func TestStopMidMove(t *testing.T) {
 	err := <-errCh
 	if err == nil {
 		t.Fatal("expected the move to fail after Stop")
+	}
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "interrupted by Stop") {
+		t.Errorf("move error = %v; want context.Canceled wrapped as 'interrupted by Stop'", err)
 	}
 	if j := box.Joints(); j[0] >= 90 {
 		t.Errorf("arm reached target despite stop: %v", j)

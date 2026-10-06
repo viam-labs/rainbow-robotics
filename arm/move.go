@@ -199,7 +199,7 @@ func (a *rb10) waitForMove(ctx context.Context, target [6]float64) error {
 		if err != nil {
 			if ctx.Err() != nil {
 				a.emergencyStop("move cancelled")
-				return ctx.Err()
+				return a.cancelErr(ctx)
 			}
 			a.emergencyStop("state stream stalled")
 			return fmt.Errorf("lost control box state during move: %w", err)
@@ -234,6 +234,20 @@ func roundJoints(j [6]float64) [6]float64 {
 	return j
 }
 
+// cancelErr explains why a move's context ended before the target was reached.
+// The context error stays wrapped so errors.Is(err, context.Canceled) holds.
+func (a *rb10) cancelErr(ctx context.Context) error {
+	err := ctx.Err()
+	switch {
+	case a.stopRequested.Swap(false):
+		return fmt.Errorf("move interrupted by Stop: %w", err)
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("move timed out before reaching target: %w", err)
+	default:
+		return fmt.Errorf("move cancelled by caller before reaching target: %w", err)
+	}
+}
+
 // emergencyStop halts the controller on a fresh context because the move's
 // context is already cancelled.
 func (a *rb10) emergencyStop(why string) {
@@ -252,6 +266,9 @@ func (a *rb10) emergencyStop(why string) {
 // Stop cancels the running operation, halts the controller and waits (bounded)
 // for it to report idle. It returns nil if the arm was already idle.
 func (a *rb10) Stop(ctx context.Context, extra map[string]any) error {
+	if a.opMgr.OpRunning() {
+		a.stopRequested.Store(true)
+	}
 	a.opMgr.CancelRunning(ctx)
 	if a.closed.Load() {
 		return nil

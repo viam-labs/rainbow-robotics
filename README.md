@@ -126,7 +126,12 @@ Commands are dispatched on key presence, e.g. `{"set_speed": 30}`.
 The module embeds `arm/rb10_1300_kinematics.json`, an SVA file transcribed
 from Rainbow's `rbpodo_ros2` URDF for `rb10_1300e` (joint origins d1 197.0,
 a1 612.7, a2 570.15, d4 117.15, d5 117.15, d6 115.3 mm). Zero pose is the arm
-straight up. Joint limits are ±360° (elbow ±165°); the configured speed and
+straight up. The end-effector frame has Z pointing out of the flange and X
+along the base X at zero pose (a +90° roll on `link6`, as Viam's UR and xArm
+models do), so "point the tool down" means the flange faces down and grippers
+attach along Z. **verify on hardware** whether the controller's `tcp_ref`
+uses the same X direction; the FK cross-check reports it. Joint limits are
+±360° (elbow ±165°); the configured speed and
 acceleration are written into every joint so the motion service's trajectory
 limits see them. Collision geometry is one box for the base and one capsule per
 link, sized from the collision meshes.
