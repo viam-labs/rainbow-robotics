@@ -24,7 +24,7 @@
     "build": "make module",
     "setup": "make setup",
     "path": "bin/module.tar.gz",
-    "arch": ["linux/amd64", "linux/arm64", "darwin/arm64"],
+    "arch": ["linux/amd64", "linux/arm64"],
     "darwin_deps": ["nlopt-static", "go"]
   }
 }
