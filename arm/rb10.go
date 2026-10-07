@@ -66,6 +66,10 @@ type rb10 struct {
 	wg     sync.WaitGroup
 	closed atomic.Bool
 
+	// startupMu serialises the startup sequence between the constructor, the
+	// reconnect callback, the activate DoCommand and the re-activation watcher.
+	startupMu sync.Mutex
+
 	mu          sync.Mutex // guards the fields below
 	speed       float64    // session joint speed, deg/s
 	accel       float64    // session joint acceleration, deg/s^2
@@ -92,8 +96,8 @@ func newRB10(ctx context.Context, deps resource.Dependencies, conf resource.Conf
 // ports, waits for the first state packet and runs the startup sequence
 // (activation, operation mode, speed bar, payload, collision settings).
 // frameConfigured says whether the component has a frame in the machine
-// config; without one the motion service cannot address the arm, so
-// MoveToPosition plans in-process instead.
+// config; without one the motion service cannot address the arm and
+// MoveToPosition is refused (joint-space moves still work).
 func NewRB10(ctx context.Context, deps resource.Dependencies, name resource.Name, conf Config, frameConfigured bool, logger logging.Logger) (rdkarm.Arm, error) {
 	cfg := conf.withDefaults()
 
@@ -117,12 +121,12 @@ func NewRB10(ctx context.Context, deps resource.Dependencies, name resource.Name
 	switch {
 	case deps == nil:
 	case !frameConfigured:
-		logger.Infow("no frame configured for this arm; MoveToPosition will plan in-process instead of using the motion service")
+		logger.Warnw("no frame configured for this arm; MoveToPosition will be refused until one is added (joint moves are unaffected)")
 	default:
 		if ms, err := motion.FromProvider(deps, cfg.Motion); err == nil {
 			a.motion = ms
 		} else {
-			logger.Infow("motion service not available; MoveToPosition will plan in-process", "motion", cfg.Motion, "error", err)
+			logger.Warnw("motion service not available; MoveToPosition will be refused", "motion", cfg.Motion, "error", err)
 		}
 	}
 
@@ -157,12 +161,87 @@ func NewRB10(ctx context.Context, deps resource.Dependencies, name resource.Name
 		a.cancel()
 		return nil, err
 	}
+	if *cfg.AutoReactivate {
+		a.wg.Add(1)
+		go func() {
+			defer a.wg.Done()
+			a.watchActivation()
+		}()
+	}
 	return a, nil
+}
+
+// reactivateDebounce is how long the arm must sit deactivated with the e-stop
+// released before the watcher re-runs activation; reactivateRetry spaces
+// attempts after a failure. Both are variables so tests can shorten them.
+var (
+	reactivateDebounce = time.Second
+	reactivateRetry    = 10 * time.Second
+)
+
+// watchActivation implements auto_reactivate. Pressing the e-stop cuts arm
+// power and drops the controller's activation state; releasing it does not
+// restore either. When the e-stop has been released and the arm has stayed
+// deactivated for reactivateDebounce, the watcher re-runs the startup
+// sequence (mc jall init, operation mode, speed bar, payload, collision
+// settings). It never clears faults and never acts while the e-stop is held.
+func (a *rb10) watchActivation() {
+	var last time.Time
+	var lostSince, nextAttempt time.Time
+	estopSeen := false
+	for {
+		snap, err := a.client.NextSnapshot(a.ctx, last, 2*time.Second)
+		if a.ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			continue
+		}
+		last = snap.At
+		st := &snap.State
+		if st.EStop() {
+			if !estopSeen {
+				a.logger.Warnw("e-stop engaged", "init_state_info", st.InitStateInfo)
+				a.setState(stateFaulted)
+				estopSeen = true
+			}
+			lostSince = time.Time{}
+			continue
+		}
+		if estopSeen {
+			a.logger.Infow("e-stop released", "activated", st.Activated())
+			estopSeen = false
+		}
+		a.mu.Lock()
+		ready := a.ready
+		a.mu.Unlock()
+		if st.Activated() || !ready {
+			lostSince = time.Time{}
+			continue
+		}
+		now := time.Now()
+		if lostSince.IsZero() {
+			lostSince = now
+			continue
+		}
+		if now.Sub(lostSince) < reactivateDebounce || now.Before(nextAttempt) {
+			continue
+		}
+		a.logger.Infow("arm is deactivated with the e-stop released; re-activating (auto_reactivate)", "init_state_info", st.InitStateInfo)
+		if err := a.startup(a.ctx); err != nil {
+			a.logger.Warnw("automatic re-activation failed; will retry", "error", err, "retry_in", reactivateRetry)
+			nextAttempt = time.Now().Add(reactivateRetry)
+			continue
+		}
+		lostSince = time.Time{}
+	}
 }
 
 // startup brings the controller to the configured state. It is run from the
 // constructor and again after every command-connection reconnect.
 func (a *rb10) startup(ctx context.Context) error {
+	a.startupMu.Lock()
+	defer a.startupMu.Unlock()
 	a.setReady(false, nil)
 	a.setState(stateActivating)
 	err := a.runStartup(ctx)
@@ -321,10 +400,10 @@ func (a *rb10) snapshot() (rb.Snapshot, error) {
 // which the module must not command motion.
 func (a *rb10) faultReason(st *rb.SystemState) string {
 	switch {
-	case !st.Activated():
-		return fmt.Sprintf("arm is not activated (init_state_info=%d)", st.InitStateInfo)
 	case st.EStop():
 		return "e-stop is engaged"
+	case !st.Activated():
+		return fmt.Sprintf("arm is not activated (init_state_info=%d)", st.InitStateInfo)
 	case st.CollisionStopped():
 		return "collision stop is active (run clear_error)"
 	case st.OpStatSoftEstopOccur != 0:

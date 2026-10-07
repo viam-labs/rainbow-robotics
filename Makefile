@@ -1,10 +1,11 @@
-GO_BUILD_ENV :=
+# Pure Go, statically linked: the module never plans in-process, so it has no
+# nlopt/cgo dependency and runs on machines without libnlopt.
+GO_BUILD_ENV := CGO_ENABLED=0
 GO_BUILD_FLAGS :=
 MODULE_BINARY := bin/rainbow-robotics
 
 ifeq ($(VIAM_TARGET_OS), windows)
 	GO_BUILD_ENV += GOOS=windows GOARCH=amd64
-	GO_BUILD_FLAGS := -tags no_cgo
 	MODULE_BINARY = bin/rainbow-robotics.exe
 endif
 

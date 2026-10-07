@@ -60,6 +60,18 @@ func MoveJ(j [6]float64, speed, accel float64) string {
 	return "move_j(" + Jnt(j) + "," + Num(speed) + "," + Num(accel) + ")"
 }
 
+// MoveL is a non-blocking straight-line TCP move to p (x,y,z mm; rx,ry,rz deg)
+// at speed mm/s and accel mm/s^2, with the controller doing the IK.
+func MoveL(p [6]float64, speed, accel float64) string {
+	return "move_l(" + Pnt(p) + "," + Num(speed) + "," + Num(accel) + ")"
+}
+
+// MoveJL is a non-blocking joint-interpolated move to the TCP pose p (same
+// units as MoveL) at joint speed deg/s and accel deg/s^2.
+func MoveJL(p [6]float64, speed, accel float64) string {
+	return "move_jl(" + Pnt(p) + "," + Num(speed) + "," + Num(accel) + ")"
+}
+
 // MoveJB2Clear clears the blended joint batch.
 func MoveJB2Clear() string { return "move_jb2_clear()" }
 

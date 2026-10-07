@@ -79,6 +79,8 @@ func (a *rb10) commandHandlers() map[string]cmdHandler {
 		"set_tool_out":       a.cmdSetToolOut,
 		"get_ft":             func(context.Context, any) (map[string]any, error) { return a.getFT() },
 		"calc_fk":            a.cmdCalcFK,
+		"move_l":             a.cmdMoveL,
+		"move_jl":            a.cmdMoveJL,
 		"eval":               a.cmdEval,
 	}
 }
@@ -171,6 +173,82 @@ func (a *rb10) cmdActivate(ctx context.Context, _ any) (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{"activated": true}, nil
+}
+
+// tcpMoveArgs parses {"pose": [x,y,z,rx,ry,rz], "speed": v, "acceleration": a}.
+func tcpMoveArgs(arg any) (pose [6]float64, speed, accel float64, hasSpeed, hasAccel bool, err error) {
+	m, err := toMap(arg)
+	if err != nil {
+		return pose, 0, 0, false, false, err
+	}
+	raw, ok := m["pose"]
+	if !ok {
+		return pose, 0, 0, false, false, errors.New(`missing "pose": [x, y, z, rx, ry, rz] in mm and degrees (the controller's tcp_ref convention)`)
+	}
+	vals, err := toFloats(raw)
+	if err != nil {
+		return pose, 0, 0, false, false, err
+	}
+	if len(vals) != 6 {
+		return pose, 0, 0, false, false, fmt.Errorf("pose needs 6 values, got %d", len(vals))
+	}
+	copy(pose[:], vals)
+	if v, ok := m["speed"]; ok {
+		if speed, err = toFloat(v); err != nil {
+			return pose, 0, 0, false, false, err
+		}
+		hasSpeed = true
+	}
+	if v, ok := m["acceleration"]; ok {
+		if accel, err = toFloat(v); err != nil {
+			return pose, 0, 0, false, false, err
+		}
+		hasAccel = true
+	}
+	return pose, speed, accel, hasSpeed, hasAccel, nil
+}
+
+// cmdMoveL is a straight-line TCP move planned by the controller: no Viam
+// motion planning, no frame conversion. Speed and acceleration are mm/s and
+// mm/s^2, default 50 and 50, speed capped at maxLinearSpeedMMs.
+func (a *rb10) cmdMoveL(ctx context.Context, arg any) (map[string]any, error) {
+	pose, speed, accel, hasSpeed, hasAccel, err := tcpMoveArgs(arg)
+	if err != nil {
+		return nil, err
+	}
+	if !hasSpeed || speed <= 0 {
+		speed = 50
+	}
+	if !hasAccel || accel <= 0 {
+		accel = 50
+	}
+	speed = min(speed, maxLinearSpeedMMs)
+	if err := a.moveTCP(ctx, true, pose, speed, accel); err != nil {
+		return nil, err
+	}
+	return map[string]any{"pose": pose[:], "speed_mm_s": speed, "acceleration_mm_s2": accel}, nil
+}
+
+// cmdMoveJL is a joint-interpolated move to a TCP pose, with the controller
+// doing the IK. Speed and acceleration are joint deg/s and deg/s^2 and default
+// to the session values, clamped like every other joint move.
+func (a *rb10) cmdMoveJL(ctx context.Context, arg any) (map[string]any, error) {
+	pose, speed, accel, hasSpeed, hasAccel, err := tcpMoveArgs(arg)
+	if err != nil {
+		return nil, err
+	}
+	sSpeed, sAccel := a.sessionSpeeds()
+	if !hasSpeed {
+		speed = sSpeed
+	}
+	if !hasAccel {
+		accel = sAccel
+	}
+	speed, accel = a.clampSpeed(speed), a.clampAccel(accel)
+	if err := a.moveTCP(ctx, false, pose, speed, accel); err != nil {
+		return nil, err
+	}
+	return map[string]any{"pose": pose[:], "speed_degs_per_sec": speed, "acceleration_degs_per_sec_per_sec": accel}, nil
 }
 
 func (a *rb10) cmdSetOperationMode(ctx context.Context, arg any) (map[string]any, error) {
@@ -486,6 +564,9 @@ func (a *rb10) getState() map[string]any {
 	out["init_error"] = float64(st.InitError)
 	out["activated"] = st.Activated()
 	out["estop"] = st.EStop()
+	ch1, ch2 := st.EStopChannels()
+	out["estop_channel_1_closed"] = ch1
+	out["estop_channel_2_closed"] = ch2
 	out["arm_power"] = st.ArmPowered()
 	out["freedrive"] = st.Freedrive()
 	out["collision_detection"] = st.CollisionDetectOnOff == 1

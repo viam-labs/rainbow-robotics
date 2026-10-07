@@ -11,10 +11,10 @@ import (
 	rdkarm "go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/grpc"
 	"go.viam.com/rdk/logging"
-	"go.viam.com/rdk/motionplan/armplanning"
 	"go.viam.com/rdk/operation"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
+	"go.viam.com/rdk/services/motion"
 	"go.viam.com/rdk/spatialmath"
 )
 
@@ -37,6 +37,7 @@ type simulated struct {
 	model        referenceframe.Model
 	opMgr        *operation.SingleOperationManager
 	simulateTime bool
+	motion       motion.Service // nil when the optional dependency did not resolve
 
 	mu     sync.Mutex
 	joints [6]float64 // degrees
@@ -51,7 +52,25 @@ func newSimulated(ctx context.Context, deps resource.Dependencies, conf resource
 	if err != nil {
 		return nil, err
 	}
-	return NewSimulated(conf.ResourceName(), *cfg, logger)
+	a, err := NewSimulated(conf.ResourceName(), *cfg, logger)
+	if err != nil {
+		return nil, err
+	}
+	s := a.(*simulated)
+	if conf.Frame == nil {
+		logger.Warnw("no frame configured for this arm; MoveToPosition will be refused until one is added (joint moves are unaffected)")
+		return s, nil
+	}
+	m := cfg.Motion
+	if m == "" {
+		m = "builtin"
+	}
+	if ms, err := motion.FromProvider(deps, m); err == nil {
+		s.motion = ms
+	} else {
+		logger.Warnw("motion service not available; MoveToPosition will be refused", "motion", m, "error", err)
+	}
+	return s, nil
 }
 
 // NewSimulated constructs the simulated twin.
@@ -223,8 +242,18 @@ func (s *simulated) MoveThroughJointPositionsStreamed(ctx context.Context, batch
 	return nil
 }
 
+// MoveToPosition goes through the motion service for the same reason as the
+// real arm: planning in-process would link nlopt into the module binary.
 func (s *simulated) MoveToPosition(ctx context.Context, pose spatialmath.Pose, extra map[string]any) error {
-	return armplanning.MoveArm(ctx, s.logger, s, pose)
+	if s.motion == nil {
+		return errNoMotionService
+	}
+	_, err := s.motion.Move(ctx, motion.MoveReq{
+		ComponentName: s.Name().ShortName(),
+		Destination:   referenceframe.NewPoseInFrame(s.Name().ShortName()+"_origin", pose),
+		Extra:         extra,
+	})
+	return err
 }
 
 func (s *simulated) GoToInputs(ctx context.Context, inputSteps ...[]referenceframe.Input) error {

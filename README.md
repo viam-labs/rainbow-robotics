@@ -21,7 +21,8 @@ validation sequence.
 ## Configure the arm
 
 Only `host` is required. Every other default moves the arm slowly in whatever
-mode the pendant already has it in.
+mode the controller is already in. The `frame` block is what lets the motion
+service (and so `MoveToPosition`) address the arm.
 
 ```json
 {
@@ -32,7 +33,8 @@ mode the pendant already has it in.
     "host": "10.0.2.7",
     "speed_degs_per_sec": 30,
     "operation_mode": "simulation"
-  }
+  },
+  "frame": { "parent": "world" }
 }
 ```
 
@@ -54,6 +56,7 @@ the arm. Switch to `real` once the validation sequence below passes.
 | `operation_mode` | `real` or `simulation` | `real` | Sent as `pgmode` after activation. `simulation` is the safe bring-up default. |
 | `activate_on_start` | bool | true | Send `mc jall init` if the arm is not activated and wait for activation. |
 | `activate_timeout_secs` | number | 60 | How long to wait for activation. |
+| `auto_reactivate` | bool | false | Pressing the e-stop cuts arm power and drops the controller's activation; releasing it does not restore them. When true, the module re-runs the startup sequence (activation, mode, speed bar, payload, collision settings) once the e-stop has been released and the arm has stayed deactivated for a second. It never acts while the e-stop is held and never clears faults. |
 | `speed_bar` | number | unset | 0–1. When set, sent as `set_speed_bar` at start and after every reconnect; when unset the pendant's value is left alone. |
 | `state_poll_hz` | int | 100 | Rate of `reqdata` polling (10–500). |
 | `move_hz` | int | 100 | Default setpoint spacing for streamed moves (10–500). Above 100 needs the pendant's high-speed external script mode. |
@@ -64,7 +67,7 @@ the arm. Switch to `real` once the validation sequence below passes.
 | `collision_detection` | bool | unset | When set, sent as `set_collision_onoff`. |
 | `collision_sensitivity` | number | unset | 0–1, sent as `set_collision_th`. |
 | `payload_kg`, `payload_cog_mm` | number, [x,y,z] | unset | Sent as `set_payload_info`; re-sent after every reconnect because the controller resets it when a pendant program ends. |
-| `motion` | string | `builtin` | Motion service used by `MoveToPosition` (optional dependency). Falls back to in-process planning if it does not resolve. |
+| `motion` | string | `builtin` | Motion service used by `MoveToPosition`. The arm needs a `frame` block in the machine config (at minimum a `parent`) for the service to address it; without one, `MoveToPosition` is refused and every joint-space method still works. |
 | `use_urdf` | bool | false | Serve the URDF with STL collision meshes instead of the SVA file. The URDF's own ±180° joint limits apply and velocity limits cannot be published (RSDK-14232). |
 | `mesh_decimation_ratios` | [number] | unset | Per-mesh decimation when loading the URDF. |
 | `command_timeout_secs` | number | 2 | How long to wait for `The command was executed`. |
@@ -78,13 +81,21 @@ the arm. Switch to `real` once the validation sequence below passes.
 | `MoveToJointPositions` | `move_j(jnt[...], v, a)`, then waits for `robot_state` to go 3 → 1 and the joints to be within 0.5° of target. Per-move overrides: `extra["speed_degs_per_sec"]`, `extra["acceleration_degs_per_sec_per_sec"]`. |
 | `MoveThroughJointPositions` | `move_jb2_clear()`, one `move_jb2_add` per waypoint, `move_jb2_run()`; the controller blends through the waypoints. `MoveOptions` velocity and acceleration limits are clamped and applied to the whole batch. |
 | `MoveThroughJointPositionsStreamed` | One `move_servo_j` per trajectory point, each sent at the previous point's time with `t1` equal to the point spacing. Ends with `move_speed_j` zeros and a barrier. Velocity and acceleration constraints are ignored (the controller tracks positions). |
-| `MoveToPosition` | Motion service `Move` when available, else in-process `armplanning.MoveArm`; both end up in `MoveThroughJointPositions`. |
+| `MoveToPosition` | Motion service `Move`, which plans against this arm's kinematics and geometries and executes through `MoveThroughJointPositions`. Planning is never done inside the module, so the binary is pure Go with no `libnlopt` dependency. |
 | `Stop` | Cancels the running operation, `move_speed_j` zeros if streaming, `task stop`, waits up to 2 s for idle. |
 | `SetManualMode` | `freedrive_teach_on()` / `freedrive_teach_off()`; real mode only. A non-zero duration turns freedrive off automatically. |
 
+`MoveToJointPositions` is a plain `move_j` with no planning involved; only
+`MoveToPosition` goes through the motion service. For Cartesian moves without
+Viam planning use the `move_l` and `move_jl` DoCommands below, which hand the
+pose to the controller's own IK.
+
 Before every move the module checks its latest state packet (under 500 ms old)
 for: activated, configured operation mode, no e-stop, no collision stop, no soft
-e-stop, no kinematic emergency stop, no joint error bits, not in freedrive. A
+e-stop, no kinematic emergency stop, no joint error bits, not in freedrive. The
+two e-stop inputs are normally-closed safety channels that read 1 while
+released; either reading 0 is treated as engaged (`get_state` shows both as
+`estop_channel_1_closed` / `estop_channel_2_closed`). A
 failed check returns an error naming the first failing condition. A fault seen
 mid-move returns `stopped before reaching target: <reason>`; faults are never
 auto-cleared.
@@ -118,6 +129,8 @@ Commands are dispatched on key presence, e.g. `{"set_speed": 30}`.
 | `set_tool_out` | `{"voltage", "out0", "out1"}` | `tool_out V,s0,s1`. |
 | `get_ft` | — | `eft_*` force-torque values. |
 | `calc_fk` | `[j0..j5]` degrees | Controller-side FK via `print(calc_fk_tcp(...))`, returned next to the module's own model pose for cross-checking. |
+| `move_l` | `{"pose": [x,y,z,rx,ry,rz], "speed", "acceleration"}` | Straight-line TCP move planned by the controller's own IK, no Viam motion planning. `pose` is in the controller's `tcp_ref` convention (mm, degrees), exactly as `get_state` reports it. Speed and acceleration are mm/s and mm/s², default 50 and 50, speed capped at 250 mm/s. Blocks until the TCP reference is within 1 mm and 0.5°. |
+| `move_jl` | same as `move_l` | Joint-interpolated move to a TCP pose with controller IK. Speed and acceleration are joint deg/s and deg/s², defaulting to the session values and clamped like every joint move. |
 | `eval` | script string | Raw single-line script pass-through; requires `allow_raw_commands: true`. |
 
 `GetStatus` returns the same map as `get_state`.
@@ -161,7 +174,8 @@ error; the fix is that one translation in the kinematics file.
   "name": "rb10-sim",
   "api": "rdk:component:arm",
   "model": "viam:rainbow-robotics:rb10-1300-simulated",
-  "attributes": { "speed_degs_per_sec": 60, "simulate_time": true }
+  "attributes": { "speed_degs_per_sec": 60, "simulate_time": true },
+  "frame": { "parent": "world" }
 }
 ```
 
@@ -170,7 +184,7 @@ error; the fix is that one translation in the kinematics file.
 | `speed_degs_per_sec` | 60 | Interpolation speed. |
 | `acceleration_degs_per_sec_per_sec` | 200 | Published limit only. |
 | `simulate_time` | false | When true, moves take real time at the configured speed; when false, joints jump to the target. |
-| `use_urdf`, `mesh_decimation_ratios` | | As for the real arm. |
+| `use_urdf`, `mesh_decimation_ratios`, `motion` | | As for the real arm. |
 
 DoCommand supports `set_speed`, `set_acceleration`, `get_speed`,
 `get_acceleration`, `get_state` and `set_joints` (teleport, degrees).

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	rdkarm "go.viam.com/rdk/components/arm"
-	"go.viam.com/rdk/motionplan/armplanning"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/services/motion"
 	"go.viam.com/rdk/spatialmath"
@@ -185,11 +184,55 @@ func linfRad(a, b []referenceframe.Input) float64 {
 	return m
 }
 
-// waitForMove waits for the controller to start moving (up to 1 s; a move
-// that is already at its target may never report motion), then to go idle, and
-// finally checks the joints are within tolerance of target. It watches the
-// fault bits on every snapshot and sends "task stop" if ctx is cancelled.
+// waitForMove waits for a joint move: see waitForArrival.
 func (a *rb10) waitForMove(ctx context.Context, target [6]float64) error {
+	return a.waitForArrival(ctx,
+		func(st *rb.SystemState) bool { return maxAbsDiffDeg(st.Joints(), target) <= arrivalToleranceDeg },
+		func(st *rb.SystemState) string {
+			return fmt.Sprintf("controller idle at %v, target %v", roundJoints(st.Joints()), roundJoints(target))
+		})
+}
+
+// waitForTCPMove waits for a controller-side Cartesian move (move_l /
+// move_jl): arrival is the TCP reference within 1 mm and 0.5 deg of target.
+func (a *rb10) waitForTCPMove(ctx context.Context, target [6]float64) error {
+	return a.waitForArrival(ctx,
+		func(st *rb.SystemState) bool { return tcpWithin(st.TCPRef, target, 1.0, 0.5) },
+		func(st *rb.SystemState) string {
+			return fmt.Sprintf("controller idle with tcp_ref %v, target %v", roundJoints(f32to64(st.TCPRef)), roundJoints(target))
+		})
+}
+
+func f32to64(v [6]float32) [6]float64 {
+	var out [6]float64
+	for i := range v {
+		out[i] = float64(v[i])
+	}
+	return out
+}
+
+// tcpWithin compares a TCP tuple (x,y,z mm; rx,ry,rz deg) against target,
+// wrapping the angle differences into [-180, 180).
+func tcpWithin(have [6]float32, want [6]float64, posTolMM, angTolDeg float64) bool {
+	for i := range 3 {
+		if math.Abs(float64(have[i])-want[i]) > posTolMM {
+			return false
+		}
+	}
+	for i := 3; i < 6; i++ {
+		d := math.Mod(float64(have[i])-want[i]+540, 360) - 180
+		if math.Abs(d) > angTolDeg {
+			return false
+		}
+	}
+	return true
+}
+
+// waitForArrival waits for the controller to start moving (up to 1 s; a move
+// that is already at its target may never report motion), then to go idle, and
+// finally checks arrived(). It watches the fault bits on every snapshot and
+// sends "task stop" if ctx is cancelled.
+func (a *rb10) waitForArrival(ctx context.Context, arrived func(*rb.SystemState) bool, describe func(*rb.SystemState) string) error {
 	gen := a.client.Generation()
 	startDeadline := time.Now().Add(moveStartTimeout)
 	var last time.Time
@@ -217,14 +260,42 @@ func (a *rb10) waitForMove(ctx context.Context, target [6]float64) error {
 			sawMoving = true
 			continue
 		}
-		atTarget := maxAbsDiffDeg(st.Joints(), target) <= arrivalToleranceDeg
-		if atTarget {
+		if arrived(st) {
 			return nil
 		}
 		if sawMoving || time.Now().After(startDeadline) {
-			return fmt.Errorf("%w: controller idle at %v, target %v", errStopped, roundJoints(st.Joints()), roundJoints(target))
+			return fmt.Errorf("%w: %s", errStopped, describe(st))
 		}
 	}
+}
+
+// maxLinearSpeedMMs caps controller-side Cartesian moves. 250 mm/s is the
+// ISO/TS 15066 hand-guiding speed limit and a sane ceiling for a driver.
+const maxLinearSpeedMMs = 250.0
+
+// moveTCP sends one move_l or move_jl to the controller's own IK and waits
+// for arrival. pose is the controller's TCP tuple (x,y,z mm; rx,ry,rz deg in
+// its own Euler convention), i.e. the same numbers get_state reports as
+// tcp_ref, so no frame conversion happens here.
+func (a *rb10) moveTCP(ctx context.Context, linear bool, pose [6]float64, speed, accel float64) error {
+	if _, err := a.ensureControllable(); err != nil {
+		return err
+	}
+	ctx, done := a.opMgr.New(ctx)
+	defer done()
+
+	var script string
+	if linear {
+		a.logger.Debugw("move_l", "target", pose, "speed_mm_s", speed, "accel_mm_s2", accel)
+		script = rb.MoveL(pose, speed, accel)
+	} else {
+		a.logger.Debugw("move_jl", "target", pose, "speed_deg_s", speed, "accel_deg_s2", accel)
+		script = rb.MoveJL(pose, speed, accel)
+	}
+	if err := a.client.Send(ctx, script); err != nil {
+		return err
+	}
+	return a.waitForTCPMove(ctx, pose)
 }
 
 func roundJoints(j [6]float64) [6]float64 {
@@ -285,21 +356,29 @@ func (a *rb10) Stop(ctx context.Context, extra map[string]any) error {
 	return nil
 }
 
-// MoveToPosition hands the Cartesian goal to the motion service when it
-// resolved, else plans in-process; both execute through MoveThroughJointPositions.
+// errNoMotionService is returned by MoveToPosition when the motion service did
+// not resolve. Planning is deliberately not done in-process: that would pull
+// the nlopt/cgo solver into this binary, which then fails to start on machines
+// without libnlopt. viam-server's builtin motion service ships with it.
+var errNoMotionService = errors.New("MoveToPosition needs the motion service: give this arm a \"frame\" " +
+	"in the machine config (at minimum a parent such as \"world\") so the motion service can address it")
+
+// MoveToPosition hands the Cartesian goal to the motion service, which plans
+// against this arm's Kinematics and Geometries and executes through
+// MoveThroughJointPositions.
 func (a *rb10) MoveToPosition(ctx context.Context, pose spatialmath.Pose, extra map[string]any) error {
 	if _, err := a.ensureControllable(); err != nil {
 		return err
 	}
-	if a.motion != nil {
-		_, err := a.motion.Move(ctx, motion.MoveReq{
-			ComponentName: a.Name().ShortName(),
-			Destination:   referenceframe.NewPoseInFrame(a.Name().ShortName()+"_origin", pose),
-			Extra:         extra,
-		})
-		return err
+	if a.motion == nil {
+		return errNoMotionService
 	}
-	return armplanning.MoveArm(ctx, a.logger, a, pose)
+	_, err := a.motion.Move(ctx, motion.MoveReq{
+		ComponentName: a.Name().ShortName(),
+		Destination:   referenceframe.NewPoseInFrame(a.Name().ShortName()+"_origin", pose),
+		Extra:         extra,
+	})
+	return err
 }
 
 func (a *rb10) GoToInputs(ctx context.Context, inputSteps ...[]referenceframe.Input) error {

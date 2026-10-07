@@ -39,7 +39,7 @@ func buildPacket(total int) []byte {
 	putI(332, 1)          // task_state
 	putF(336, 0.75)       // default_speed
 	putI(340, 3)          // robot_state
-	putI(344, 0b01000111) // information_chunk_1: 48V in/out, 24V in, arm power
+	putI(344, 0b01101111) // information_chunk_1: 48V in/out, 24V in, both e-stop channels closed (released), arm power
 	putI(372+4*2, 1<<8)   // jnt_info[2] JAM
 	putI(396, 1)          // collision_detect_onoff
 	putI(400, 0)          // is_freedrive_mode
@@ -178,5 +178,21 @@ func TestReadPacketFraming(t *testing.T) {
 	}
 	if _, err := ReadPacket(r); err == nil {
 		t.Error("expected EOF")
+	}
+}
+
+func TestEStopPolarity(t *testing.T) {
+	var st SystemState
+	st.InformationChunk1 = InfoBitEStop1 | InfoBitEStop2 | InfoBitArmPower
+	if st.EStop() {
+		t.Error("both channels closed must read as released")
+	}
+	st.InformationChunk1 &^= InfoBitEStop2
+	if !st.EStop() {
+		t.Error("one open channel must read as engaged")
+	}
+	st.InformationChunk1 = InfoBitArmPower
+	if !st.EStop() {
+		t.Error("both channels open must read as engaged")
 	}
 }

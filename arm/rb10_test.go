@@ -797,6 +797,7 @@ func TestRainbowPoseRoundTrip(t *testing.T) {
 func TestSnapshotHelpers(t *testing.T) {
 	var st rb.SystemState
 	st.InitStateInfo = 6
+	st.InformationChunk1 = rb.InfoBitEStop1 | rb.InfoBitEStop2 | rb.InfoBitArmPower // e-stop released
 	a := &rb10{cfg: Config{OperationMode: ModeSimulation}}
 	if r := a.faultReason(&st); r != "" {
 		t.Errorf("unexpected fault %q", r)
@@ -846,9 +847,10 @@ func TestPlanToPoseWithSVAModel(t *testing.T) {
 	if err := s.MoveThroughJointPositions(ctx, plan, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	// And plan a Cartesian move end to end through MoveToPosition.
-	if err := s.MoveToPosition(ctx, startPose, nil); err != nil {
-		t.Fatalf("MoveToPosition on simulated twin: %v", err)
+	// Without a motion service MoveToPosition is refused rather than planned
+	// in-process, which keeps nlopt out of the module binary.
+	if err := s.MoveToPosition(ctx, startPose, nil); !errors.Is(err, errNoMotionService) {
+		t.Fatalf("MoveToPosition without motion service = %v, want errNoMotionService", err)
 	}
 }
 
@@ -905,5 +907,109 @@ func TestLoad3DModels(t *testing.T) {
 	t.Setenv("VIAM_MODULE_ROOT", t.TempDir())
 	if n := len(load3DModels(logging.NewTestLogger(t))); n != 0 {
 		t.Errorf("expected no models from an empty root, got %d", n)
+	}
+}
+
+func TestAutoReactivateAfterEStopRelease(t *testing.T) {
+	oldDebounce, oldRetry := reactivateDebounce, reactivateRetry
+	reactivateDebounce, reactivateRetry = 50*time.Millisecond, 200*time.Millisecond
+	defer func() { reactivateDebounce, reactivateRetry = oldDebounce, oldRetry }()
+
+	box, a := newTestArm(t, fakebox.Options{Activated: true}, func(c *Config) {
+		c.AutoReactivate = ptr(true)
+		c.SpeedBar = ptr(0.3)
+	})
+	ctx := context.Background()
+
+	box.SetEStop(true)
+	time.Sleep(50 * time.Millisecond)
+	if err := a.MoveToJointPositions(ctx, deg(1, 0, 0, 0, 0, 0), nil); err == nil || !strings.Contains(err.Error(), "e-stop") {
+		t.Fatalf("expected e-stop refusal while pressed, got %v", err)
+	}
+	// Held e-stop must not trigger activation.
+	time.Sleep(150 * time.Millisecond)
+	if strings.Contains(strings.Join(box.Commands(), "\n"), "mc jall init") {
+		t.Fatal("activation attempted while the e-stop was held")
+	}
+
+	box.ClearCommands()
+	box.SetEStop(false)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && box.State().InitStateInfo != rb.InitStateActivated {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if box.State().InitStateInfo != rb.InitStateActivated {
+		t.Fatalf("arm not re-activated after e-stop release; commands: %v", box.Commands())
+	}
+	// The rest of the startup sequence follows activation; give it a moment.
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(strings.Join(box.Commands(), "\n"), "set_speed_bar(0.3)") {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cmds := strings.Join(box.Commands(), "\n")
+	if !strings.Contains(cmds, "mc jall init") || !strings.Contains(cmds, "set_speed_bar(0.3)") {
+		t.Errorf("re-activation did not re-run the startup sequence: %v", box.Commands())
+	}
+	// Moves work again once startup has completed.
+	deadline = time.Now().Add(2 * time.Second)
+	var err error
+	for time.Now().Before(deadline) {
+		if err = a.MoveToJointPositions(ctx, deg(1, 0, 0, 0, 0, 0), nil); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("move after auto re-activation: %v", err)
+	}
+}
+
+func TestNoAutoReactivateByDefault(t *testing.T) {
+	box, a := newTestArm(t, fakebox.Options{Activated: true}, nil)
+	box.SetEStop(true)
+	time.Sleep(30 * time.Millisecond)
+	box.ClearCommands()
+	box.SetEStop(false)
+	time.Sleep(300 * time.Millisecond)
+	if strings.Contains(strings.Join(box.Commands(), "\n"), "mc jall init") {
+		t.Fatal("re-activated without auto_reactivate")
+	}
+	if err := a.MoveToJointPositions(context.Background(), deg(1, 0, 0, 0, 0, 0), nil); err == nil || !strings.Contains(err.Error(), "not activated") {
+		t.Fatalf("expected 'not activated' refusal, got %v", err)
+	}
+}
+
+func TestMoveLDoCommand(t *testing.T) {
+	box, a := newTestArm(t, fakebox.Options{Activated: true}, nil)
+	ctx := context.Background()
+	box.Mutate(func(st *rb.SystemState) { st.TCPRef = [6]float32{0, -271.55, 1497, 0, 0, 0} })
+	res, err := a.DoCommand(ctx, map[string]any{"move_l": map[string]any{
+		"pose": []any{100.0, -271.55, 1400.0, 0.0, 0.0, 90.0}, "speed": 1000.0, "acceleration": 500.0,
+	}})
+	if err != nil {
+		t.Fatalf("move_l: %v", err)
+	}
+	if res["speed_mm_s"] != maxLinearSpeedMMs {
+		t.Errorf("speed not capped: %v", res["speed_mm_s"])
+	}
+	cmds := strings.Join(box.Commands(), "\n")
+	if !strings.Contains(cmds, "move_l(pnt[100, -271.55, 1400, 0, 0, 90],250,500)") {
+		t.Errorf("move_l script not sent: %v", box.Commands())
+	}
+	if tcp := box.State().TCPRef; tcp[0] != 100 || tcp[2] != 1400 || tcp[5] != 90 {
+		t.Errorf("fake box tcp_ref = %v", tcp)
+	}
+	// move_jl uses joint speeds and the session defaults.
+	if _, err := a.DoCommand(ctx, map[string]any{"move_jl": map[string]any{"pose": []any{0.0, -271.55, 1497.0, 0.0, 0.0, 0.0}}}); err != nil {
+		t.Fatalf("move_jl: %v", err)
+	}
+	if !strings.Contains(strings.Join(box.Commands(), "\n"), "move_jl(pnt[0, -271.55, 1497, 0, 0, 0],1000,") {
+		t.Errorf("move_jl script not sent: %v", box.Commands())
+	}
+	// Refused while e-stopped.
+	box.SetEStop(true)
+	time.Sleep(30 * time.Millisecond)
+	if _, err := a.DoCommand(ctx, map[string]any{"move_l": map[string]any{"pose": []any{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}}}); err == nil {
+		t.Fatal("move_l accepted while e-stopped")
 	}
 }

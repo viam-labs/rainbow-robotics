@@ -55,6 +55,7 @@ type Config struct {
 	OperationMode       string   `json:"operation_mode,omitempty"`
 	ActivateOnStart     *bool    `json:"activate_on_start,omitempty"`
 	ActivateTimeoutSecs float64  `json:"activate_timeout_secs,omitempty"`
+	AutoReactivate      *bool    `json:"auto_reactivate,omitempty"`
 	SpeedBar            *float64 `json:"speed_bar,omitempty"`
 
 	StatePollHz   int      `json:"state_poll_hz,omitempty"`
@@ -153,6 +154,9 @@ func (cfg *Config) withDefaults() Config {
 	if c.ActivateOnStart == nil {
 		c.ActivateOnStart = ptr(true)
 	}
+	if c.AutoReactivate == nil {
+		c.AutoReactivate = ptr(false)
+	}
 	if c.ActivateTimeoutSecs == 0 {
 		c.ActivateTimeoutSecs = DefaultActivateTimeout
 	}
@@ -193,9 +197,11 @@ type SimConfig struct {
 	SimulateTime            bool      `json:"simulate_time,omitempty"`
 	UseURDF                 bool      `json:"use_urdf,omitempty"`
 	MeshDecimationRatios    []float64 `json:"mesh_decimation_ratios,omitempty"`
+	Motion                  string    `json:"motion,omitempty"`
 }
 
-// Validate checks the simulated model's attributes.
+// Validate checks the simulated model's attributes and returns the motion
+// service as an optional dependency.
 func (cfg *SimConfig) Validate(path string) ([]string, []string, error) {
 	if cfg.SpeedDegsPerSec < 0 || cfg.SpeedDegsPerSec > DefaultMaxSpeedDegs {
 		return nil, nil, resource.NewConfigValidationError(path,
@@ -204,5 +210,9 @@ func (cfg *SimConfig) Validate(path string) ([]string, []string, error) {
 	if cfg.AccelerationDegsPerSec2 < 0 {
 		return nil, nil, resource.NewConfigValidationError(path, errors.New("acceleration_degs_per_sec_per_sec must be > 0"))
 	}
-	return nil, nil, nil
+	m := cfg.Motion
+	if m == "" {
+		m = "builtin"
+	}
+	return nil, []string{motion.Named(m).String()}, nil
 }

@@ -236,9 +236,20 @@ func (s *SystemState) Moving() bool {
 // Idle reports whether no motion command is executing.
 func (s *SystemState) Idle() bool { return !s.Moving() }
 
-// EStop reports whether either control box e-stop input is asserted.
+// EStop reports whether the e-stop is engaged. Rainbow documents bits 3 and 5
+// only as "E-Stop state 1/2"; the inputs are normally-closed safety channels
+// that read 1 while the circuit is intact (button released) and drop to 0 when
+// the button is pressed, which is what a powered, activated arm with the
+// button released reports. Either channel reading 0 counts as engaged.
 func (s *SystemState) EStop() bool {
-	return s.InformationChunk1&(InfoBitEStop1|InfoBitEStop2) != 0
+	ch1, ch2 := s.EStopChannels()
+	return !ch1 || !ch2
+}
+
+// EStopChannels returns the raw state of the two e-stop inputs (true = circuit
+// closed, i.e. not pressed).
+func (s *SystemState) EStopChannels() (ch1, ch2 bool) {
+	return s.InformationChunk1&InfoBitEStop1 != 0, s.InformationChunk1&InfoBitEStop2 != 0
 }
 
 // ArmPowered reports whether power is applied to the arm.

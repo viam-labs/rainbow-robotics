@@ -61,16 +61,19 @@ type Box struct {
 	closed  bool
 
 	// motion simulation
-	target      [6]float64
-	moving      bool
-	speed       float64 // deg/s for the current move
-	queue       []jb2Entry
-	jb2Building []jb2Entry
-	servoActive bool
-	servoUntil  time.Time
-	printSeq    int
-	servoCount  int
-	activating  bool
+	target       [6]float64
+	moving       bool
+	speed        float64 // deg/s for the current move
+	queue        []jb2Entry
+	jb2Building  []jb2Entry
+	servoActive  bool
+	servoUntil   time.Time
+	linear       bool
+	linearTarget [6]float64
+	linearUntil  time.Time
+	printSeq     int
+	servoCount   int
+	activating   bool
 
 	done chan struct{}
 	wg   sync.WaitGroup
@@ -114,7 +117,8 @@ func Start(opts Options) (*Box, error) {
 	b.st.RobotState = rb.RobotStateIdle
 	b.st.TaskState = rb.TaskStateIdle
 	b.st.DefaultSpeed = 1
-	b.st.InformationChunk1 = rb.InfoBit48VIn | rb.InfoBit48VOut | rb.InfoBit24VIn
+	// E-stop channels read 1 while released (normally-closed safety inputs).
+	b.st.InformationChunk1 = rb.InfoBit48VIn | rb.InfoBit48VOut | rb.InfoBit24VIn | rb.InfoBitEStop1 | rb.InfoBitEStop2
 	if opts.Activated {
 		b.st.InitStateInfo = rb.InitStateActivated
 		b.st.InformationChunk1 |= rb.InfoBitArmPower
@@ -218,16 +222,20 @@ func (b *Box) Moving() bool {
 	return b.st.Moving()
 }
 
-// SetEStop asserts or clears e-stop input 1, stopping any motion.
+// SetEStop presses or releases the e-stop. Pressing opens both safety
+// channels (bits drop to 0), stops motion, cuts arm power and drops the
+// activation state, as the real box does; releasing closes the channels again
+// but the arm stays deactivated until the next "mc jall init".
 func (b *Box) SetEStop(on bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if on {
-		b.st.InformationChunk1 |= rb.InfoBitEStop1
+		b.st.InformationChunk1 &^= rb.InfoBitEStop1 | rb.InfoBitEStop2 | rb.InfoBitArmPower
+		b.st.InitStateInfo = 0
 		b.stopMotionLocked()
 		b.broadcastLocked("error[code][0]")
 	} else {
-		b.st.InformationChunk1 &^= rb.InfoBitEStop1
+		b.st.InformationChunk1 |= rb.InfoBitEStop1 | rb.InfoBitEStop2
 	}
 }
 
@@ -324,6 +332,7 @@ func (b *Box) broadcastLocked(line string) {
 
 var (
 	reMoveJ       = regexp.MustCompile(`^move_j\(jnt\[([^\]]*)\],([^,]+),([^)]+)\)$`)
+	reMoveL       = regexp.MustCompile(`^move_(l|jl)\(pnt\[([^\]]*)\],([^,]+),([^)]+)\)$`)
 	reMoveJB2Add  = regexp.MustCompile(`^move_jb2_add\(jnt\[([^\]]*)\],([^,]+),([^,]+),([^,]+),([^)]+)\)$`)
 	reMoveServoJ  = regexp.MustCompile(`^move_servo_j\(jnt\[([^\]]*)\],([^,]+),([^,]+),([^,]+),([^)]+)\)$`)
 	reMoveSpeedJ  = regexp.MustCompile(`^move_speed_j\(jnt\[([^\]]*)\],([^,]+),([^,]+),([^,]+),([^)]+)\)$`)
@@ -441,6 +450,34 @@ func (b *Box) handle(line string) (string, bool) {
 		speed, _ := strconv.ParseFloat(strings.TrimSpace(m[2]), 64)
 		b.queue = []jb2Entry{{j: j, speed: speed}}
 		b.startNextLocked()
+		return "", true
+	}
+	if m := reMoveL.FindStringSubmatch(line); m != nil {
+		p, err := parse6(m[2])
+		if err != nil {
+			return "", false
+		}
+		if b.st.InitStateInfo != rb.InitStateActivated {
+			b.broadcastLocked("error[code][186]")
+			return "", true
+		}
+		speed, _ := strconv.ParseFloat(strings.TrimSpace(m[3]), 64)
+		if speed <= 0 {
+			speed = 50
+		}
+		cur := b.st.TCPRef
+		dist := 0.0
+		for i := range 3 {
+			d := p[i] - float64(cur[i])
+			dist += d * d
+		}
+		b.linear = true
+		b.linearTarget = p
+		b.linearUntil = time.Now().Add(time.Duration(math.Sqrt(dist) / speed * float64(time.Second)))
+		if b.st.RobotState != rb.RobotStateMoving {
+			b.st.RobotState = rb.RobotStateMoving
+			b.broadcastLocked("info[motion_changed][1]")
+		}
 		return "", true
 	}
 	if m := reMoveJB2Add.FindStringSubmatch(line); m != nil {
@@ -632,6 +669,7 @@ func (b *Box) stopMotionLocked() {
 	b.queue = nil
 	b.jb2Building = nil
 	b.moving = false
+	b.linear = false
 	b.servoActive = false
 	b.target = b.st.Joints()
 	b.st.RobotState = rb.RobotStateIdle
@@ -656,6 +694,18 @@ func (b *Box) simulate() {
 			if b.servoActive && now.After(b.servoUntil) {
 				b.servoActive = false
 				if b.st.RobotState == rb.RobotStateMoving {
+					b.st.RobotState = rb.RobotStateIdle
+					b.broadcastLocked("info[motion_changed][0]")
+				}
+			}
+			if b.linear && now.After(b.linearUntil) {
+				// Cartesian moves jump the TCP reference to the target; the
+				// fake box has no IK so the joints are left alone.
+				b.linear = false
+				for i := range 6 {
+					b.st.TCPRef[i] = float32(b.linearTarget[i])
+				}
+				if !b.moving && b.st.RobotState == rb.RobotStateMoving {
 					b.st.RobotState = rb.RobotStateIdle
 					b.broadcastLocked("info[motion_changed][0]")
 				}
