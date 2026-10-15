@@ -5,7 +5,7 @@ go 1.25.10
 require (
 	github.com/golang/geo v0.0.0-20230421003525-6adc56603217
 	go.viam.com/api v0.1.590
-	go.viam.com/rdk v1.11.0
+	go.viam.com/rdk v1.12.0
 	go.viam.com/test v1.2.4
 )
 
